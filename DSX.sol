@@ -1,8 +1,17 @@
 
 contract DSX {
-    
+
+    /* 
+    Each Token has its own Market struct
+     */
     Market[] markets;
 
+    /* 
+    The order book is implemented in form of two mappings for the bid and ask quotes. Each market is
+    identifiable by its block number, name, id and token address. Hence, each token can get
+    registered only once and all orders associated with the token are matched within one order
+    book
+    */
     struct Market{
       uint256 id;
       bytes32 name;
@@ -14,12 +23,25 @@ contract DSX {
       bytes32 highestBidId;
       mapping (bytes32 => OrderId) askOrderBook;
       mapping (bytes32 => OrderId) bidOrderBook;
-    }
+    }   
+
+    /* 
+    The OrderId struct serves as means to create a linked list on basis
+    of solidity’s mapping storage type.
+     */
     struct OrderId{
       bytes32 id;
       bytes32 nextId;
       bytes32 prev_id;
     }
+
+    /*
+    All trade information associated with a particular order is saved in a struct named "Order". 
+    The variable “typ” simply defines whether it is a bid or ask order. The marketId assigns 
+    the order to a particular token. The blockNumber indicates when the
+    order was incorporated into the Blockchain. By hashing all the variables, each order gets
+    assigned to a unique id that is used in a global mapping.
+    */
     struct Order {
       bytes32 typ;
       uint256 amount;
@@ -30,19 +52,27 @@ contract DSX {
       address owner;
       uint256 blockNumber;
     }
+
+    /* 
+    Tracks the users' balances. Further explanations in comment above deposit functions
+    */
     struct LocalBalance {
       uint256 available;
       uint256 trading;
     }
+
     mapping (bytes32 => Order) orders;
     mapping (address => mapping (uint256 => LocalBalance)) public balances;
-    uint256 public nextbidIdIter = 0;
+    uint256 public nextMarketID = 0;
     Token currentToken;
     uint256[] bidPrice;
     uint256[] bidVol;
     uint256[] askPrice;
     uint256[] askVol;
 
+    /* 
+    Retrieves two arrays, containing the prices and volumes of the bid order book
+     */
     function getBidOrders(uint256 _marketId) constant returns (uint256[] rv1,uint256[] rv2){
         bytes32 bidIdIter = markets[_marketId].highestBidId;
         bidPrice = rv1;
@@ -55,6 +85,9 @@ contract DSX {
         return(bidPrice,bidVol);
     }
 
+    /* 
+    Retrieves two arrays, containing the prices and volumes of the ask order book
+     */
     function getAskOrders(uint256 _marketId) constant returns (uint256[] rv1,uint256[] rv2){
           askPrice = rv1;
           askVol = rv2;
@@ -67,13 +100,29 @@ contract DSX {
         return(askPrice,askVol);
     }
 
+    /*
+    After creating the individual token contract, it needs to be registered with the exchange.
+    By passing the token’s address as parameter to the “registerToken” function, a Market struct
+    is created containing the order book for the associated token.
+     */
     function registerToken(address _addr, bytes32 _name) {
-          markets.push(Market(nextbidIdIter,_name,_addr,1,msg.sender,block.number,0,0));
-          nextbidIdIter +=1;
+          markets.push(Market(nextMarketID,_name,_addr,1,msg.sender,block.number,0,0));
+          nextMarketID +=1;
           currentToken = Token(_addr);
     }
 
-
+    /*
+    In order to execute an initial public offering, the token owner needs to deposit tokens
+    on the exchange, so that the exchange is capable of executing orders on his behalf. In
+    technical terms this means that the token owner allows the exchange contract to credit
+    tokens to its account inside the token contract. Hence, according to the token contract, the
+    owner has given away tokens to the exchange. The DSX contract itself now keeps track of
+    which user owns how much of the exchange’s tokens. At this point, a distinction is made between
+    available and trading balance. The former one determines the amount of tokens
+    that are free to withdraw and trade. The latter one determines the amount of tokens that are 
+    bound to outstanding orders. By doing so, the obvious attack vector to double spend tokens that 
+    are not yet matched is eliminated.
+     */
     function deposit(uint256 _amount,uint256 _marketId) {
           currentToken = Token(markets[_marketId].addr);
           if (currentToken.transferFrom(msg.sender, this, _amount)){
@@ -82,7 +131,14 @@ contract DSX {
             balances[msg.sender][_marketId].available = balance;
           }
     }
-
+    
+    /* 
+    Token owners are free to withdraw their tokens at any time. This ensures
+    that tokens stay independent and tradable on any exchange. Especially in view of the fact
+    that any error in the exchange’s complex code may lead to a total loss of all funds, the
+    option to withdraw tokens to save them within the much simpler token contract is of vital
+    importance.
+     */
     function withdraw(uint256 _amount, uint256 _marketId) {
           currentToken = Token(markets[_marketId].addr);
           if (currentToken.transfer(msg.sender, _amount)) {
@@ -97,7 +153,9 @@ contract DSX {
           return true;
     }
 
-
+    /* 
+    Saves an order and verifies that the buyer has attached enough Ether
+     */
     function buy(uint256 _amount, uint256 _price, uint256 _marketId) payable {
           uint256 rv;
           if (!checkOrder(_amount, _price, _marketId)) throw;
@@ -110,7 +168,9 @@ contract DSX {
           matchOrders(_marketId);
     }
 
-
+    /* 
+    Saves an order and verifies that the seller has enough tokens
+     */
     function sell(uint256 _amount, uint256 _price, uint256 _marketId){
           if (!checkOrder(_amount, _price, _marketId)) throw;
           uint256 balance = balances[msg.sender][_marketId].available;
@@ -120,7 +180,9 @@ contract DSX {
           matchOrders(_marketId);
     }
 
-
+    /*
+    Saves an order in the linked list while maintaning a best price sequence
+    */
     function saveOrder(bytes32 _typ,uint256 _amount, uint256 _price, uint256 _marketId) returns(bytes32 rv){
           // Daten typ Konvertierung "memory" zu "storage"
           bytes32 typ = _typ;
@@ -203,6 +265,9 @@ contract DSX {
           }
     }
 
+    /* 
+    Removes an order struct from the linked list.
+     */
     function removeOrder(bytes32 _tradeId, uint256 _marketId){
 
           bytes32 flag = "BID";
@@ -248,6 +313,12 @@ contract DSX {
           orders[_tradeId].blockNumber = 0;
     }
 
+    /* 
+    Once the orders are saved based on the best prices and highest volumes, a simple iteration
+    is all that is needed to match and settle orders. Settlement happens by directly sending
+    Ether to the seller and modifying the users’ local token balances. The match function
+    gets executed right after an order is newly submitted.
+     */
     function matchOrders(uint256 _marketId) {
 
           bool bidMatched = false;
@@ -323,78 +394,75 @@ contract DSX {
     }
 }
 
-  /*
-  Token Standard (without any additional functionality) Source: https://github.com/ethereum/EIPs/issues/20
-  */
-    contract Token {
+/*
+Token Standard (without any additional functionality) Source: https://github.com/ethereum/EIPs/issues/20
+*/
+contract Token {
 
       address public token = this;
 
       event Transfer(address indexed _from, address indexed _to, uint256 _value);
       event Approval(address indexed _owner, address indexed _spender, uint256 _value);
 
-        function transfer(address _to, uint256 _value) returns (bool success) {
-            //Default assumes totalSupply can't be over max (2^256 - 1).
-            //If your token leaves out totalSupply and can issue more tokens as time goes on, you need to check if it doesn't wrap.
-            //Replace the if with this one instead.
-            //if (balances[msg.sender] >= _value && balances[_to] + _value > balances[_to]) {
-            if (balances[msg.sender] >= _value && _value > 0) {
-                balances[msg.sender] -= _value;
-                balances[_to] += _value;
-                Transfer(msg.sender, _to, _value);
-                return true;
-            } else { return false; }
-        }
+      function transfer(address _to, uint256 _value) returns (bool success) {
+          //Default assumes totalSupply can't be over max (2^256 - 1).
+          //If your token leaves out totalSupply and can issue more tokens as time goes on, you need to check if it doesn't wrap.
+          //Replace the if with this one instead.
+          //if (balances[msg.sender] >= _value && balances[_to] + _value > balances[_to]) {
+          if (balances[msg.sender] >= _value && _value > 0) {
+              balances[msg.sender] -= _value;
+              balances[_to] += _value;
+              Transfer(msg.sender, _to, _value);
+              return true;
+          } else { return false; }
+      }
 
-        function transferFrom(address _from, address _to, uint256 _value) returns (bool success) {
-            //same as above. Replace this line with the following if you want to protect against wrapping uints.
-            //if (balances[_from] >= _value && allowed[_from][msg.sender] >= _value && balances[_to] + _value > balances[_to]) {
-            if (balances[_from] >= _value && allowed[_from][msg.sender] >= _value && _value > 0) {
-                balances[_to] += _value;
-                balances[_from] -= _value;
-                allowed[_from][msg.sender] -= _value;
-                //Transfer(_from, _to, _value);
-                return true;
-            } else { return false; }
-        }
+      function transferFrom(address _from, address _to, uint256 _value) returns (bool success) {
+          //same as above. Replace this line with the following if you want to protect against wrapping uints.
+          //if (balances[_from] >= _value && allowed[_from][msg.sender] >= _value && balances[_to] + _value > balances[_to]) {
+          if (balances[_from] >= _value && allowed[_from][msg.sender] >= _value && _value > 0) {
+              balances[_to] += _value;
+              balances[_from] -= _value;
+              allowed[_from][msg.sender] -= _value;
+              //Transfer(_from, _to, _value);
+              return true;
+          } else { return false; }
+      }
 
-        function balanceOf(address _owner) constant returns (uint256 balance) {
-            return balances[_owner];
-        }
+      function balanceOf(address _owner) constant returns (uint256 balance) {
+          return balances[_owner];
+      }
 
-        function approve(address _spender, uint256 _value) returns (bool success) {
-            allowed[msg.sender][_spender] = _value;
-            Approval(msg.sender, _spender, _value);
-            return true;
-        }
+      function approve(address _spender, uint256 _value) returns (bool success) {
+          allowed[msg.sender][_spender] = _value;
+          Approval(msg.sender, _spender, _value);
+          return true;
+      }
 
-        function allowance(address _owner, address _spender) constant returns (uint256 remaining) {
-          return allowed[_owner][_spender];
-        }
+      function allowance(address _owner, address _spender) constant returns (uint256 remaining) {
+        return allowed[_owner][_spender];
+      }
 
-        mapping (address => uint256) public balances;
-        mapping (address => mapping (address => uint256)) public allowed;
-        uint256 public totalSupply;
+      mapping (address => uint256) public balances;
+      mapping (address => mapping (address => uint256)) public allowed;
+      uint256 public totalSupply;
 
+      /* Public variables of the token */
 
+      /*
+      NOTE:
+      The following variables are OPTIONAL vanities. One does not have to include them.
+      They allow one to customise the token contract & in no way influences the core functionality.
+      Some wallets/interfaces might not even bother to look at this information.
+      */
+      string public name;                   //fancy name: eg Simon Bucks
+      uint8 public decimals;                //How many decimals to show. ie. There could 1000 base units with 3 decimals. Meaning 0.980 SBX = 980 base units. It's like comparing 1 wei to 1 ether.
+      string public symbol;                 //An identifier: eg SBX
+      string public version = 'H0.1';       //human 0.1 standard. Just an arbitrary versioning scheme.
 
-        /* Public variables of the token */
-
-        /*
-        NOTE:
-        The following variables are OPTIONAL vanities. One does not have to include them.
-        They allow one to customise the token contract & in no way influences the core functionality.
-        Some wallets/interfaces might not even bother to look at this information.
-        */
-        string public name;                   //fancy name: eg Simon Bucks
-        uint8 public decimals;                //How many decimals to show. ie. There could 1000 base units with 3 decimals. Meaning 0.980 SBX = 980 base units. It's like comparing 1 wei to 1 ether.
-        string public symbol;                 //An identifier: eg SBX
-        string public version = 'H0.1';       //human 0.1 standard. Just an arbitrary versioning scheme.
-
-        function Token() {
-            balances[msg.sender] = 100000;               // Give the creator all initial tokens
-            totalSupply = 100000;                        // Update total supply
-            name = "DSX_token";
-        }
-
-    }
+      function Token() {
+          balances[msg.sender] = 100000;               // Give the creator all initial tokens
+          totalSupply = 100000;                        // Update total supply
+          name = "DSX_token";
+      }
+}
