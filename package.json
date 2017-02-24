@@ -1,0 +1,26 @@
+{
+  "name": "desrist_repo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IISM-Ethereum/decentralisedStockExchange.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/IISM-Ethereum/decentralisedStockExchange/issues"
+  },
+  "homepage": "https://github.com/IISM-Ethereum/decentralisedStockExchange#readme",
+  "devDependencies": {
+    "assert": "^1.4.1",
+    "chai": "^3.5.0",
+    "chai-as-promised": "^6.0.0",
+    "co": "^4.6.0",
+    "mocha": "^3.2.0"
+  }
+}
